@@ -88,11 +88,36 @@ jobs:
     # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
     # function discovers any repo whose workflows declare the `keck` label, so no infra change
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
-    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
-    # because every tool it uses arrives through a setup action.
+    # carries none of `ubuntu-latest`'s preinstalled toolchain. Unlike the two jobs above,
+    # this one needs a tool no setup action brings: a C compiler, installed below
+    # (KK-AGENTS#275).
     runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
+      # KK-AGENTS#275. The pool image ships no C compiler, so the first build script
+      # (proc-macro2) dies with `error: linker 'cc' not found`, and `ring` and `onig_sys`
+      # further down the graph both compile C of their own. build-essential covers all
+      # three; see the PR for the measured package count. Keep this in step with the
+      # identical block in clippy-workspace below.
+      - name: Install a C toolchain
+        run: |
+          set -euo pipefail
+          if command -v cc >/dev/null 2>&1; then
+            echo "cc already present: $(cc --version | head -1)"
+            exit 0
+          fi
+          if [ "$(id -u)" = "0" ]; then
+            sudo=""
+          elif command -v sudo >/dev/null 2>&1; then
+            sudo="sudo"
+          else
+            echo "no cc, not root, and no sudo available on this runner" >&2
+            exit 1
+          fi
+          $sudo apt-get update -qq
+          $sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends build-essential
+          cc --version | head -1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -105,11 +130,32 @@ jobs:
     # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
     # function discovers any repo whose workflows declare the `keck` label, so no infra change
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
-    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
-    # because every tool it uses arrives through a setup action.
+    # carries none of `ubuntu-latest`'s preinstalled toolchain. Like test-workspace, this job
+    # needs a C compiler that no setup action brings, installed below (KK-AGENTS#275).
     runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
+      # KK-AGENTS#275. Same gap as test-workspace above: the pool image has no C compiler,
+      # and clippy still runs every build script. Keep the two blocks identical.
+      - name: Install a C toolchain
+        run: |
+          set -euo pipefail
+          if command -v cc >/dev/null 2>&1; then
+            echo "cc already present: $(cc --version | head -1)"
+            exit 0
+          fi
+          if [ "$(id -u)" = "0" ]; then
+            sudo=""
+          elif command -v sudo >/dev/null 2>&1; then
+            sudo="sudo"
+          else
+            echo "no cc, not root, and no sudo available on this runner" >&2
+            exit 1
+          fi
+          $sudo apt-get update -qq
+          $sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends build-essential
+          cc --version | head -1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
