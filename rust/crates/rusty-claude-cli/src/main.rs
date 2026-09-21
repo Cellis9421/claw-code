@@ -5833,9 +5833,15 @@ fn format_context_window_blocked_error(session_id: &str, error: &api::ApiError) 
             context_window_tokens,
         } => {
             lines.push(format!("  Model            {model}"));
-            lines.push(format!("  Input estimate   ~{estimated_input_tokens} tokens (heuristic)"));
-            lines.push(format!("  Requested output {requested_output_tokens} tokens"));
-            lines.push(format!("  Total estimate   ~{estimated_total_tokens} tokens (heuristic)"));
+            lines.push(format!(
+                "  Input estimate   ~{estimated_input_tokens} tokens (heuristic)"
+            ));
+            lines.push(format!(
+                "  Requested output {requested_output_tokens} tokens"
+            ));
+            lines.push(format!(
+                "  Total estimate   ~{estimated_total_tokens} tokens (heuristic)"
+            ));
             lines.push(format!("  Context window   {context_window_tokens} tokens"));
         }
         api::ApiError::Api { message, body, .. } => {

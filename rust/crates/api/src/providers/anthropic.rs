@@ -512,7 +512,10 @@ impl AnthropicClient {
             input_tokens: u32,
         }
 
-        let request_url = format!("{}/v1/messages/count_tokens", self.base_url.trim_end_matches('/'));
+        let request_url = format!(
+            "{}/v1/messages/count_tokens",
+            self.base_url.trim_end_matches('/')
+        );
         let request_body = self.request_profile.render_json_body(request)?;
         let response = self
             .build_request(&request_url)
