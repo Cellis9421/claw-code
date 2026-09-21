@@ -47,7 +47,12 @@ env:
 jobs:
   doc-source-of-truth:
     name: docs source-of-truth
-    runs-on: ubuntu-latest
+    # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
+    # function discovers any repo whose workflows declare the `keck` label, so no infra change
+    # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
+    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
+    # because every tool it uses arrives through a setup action.
+    runs-on: [self-hosted, linux, keck]
     defaults:
       run:
         working-directory: .
@@ -61,7 +66,12 @@ jobs:
 
   fmt:
     name: cargo fmt
-    runs-on: ubuntu-latest
+    # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
+    # function discovers any repo whose workflows declare the `keck` label, so no infra change
+    # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
+    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
+    # because every tool it uses arrives through a setup action.
+    runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +85,12 @@ jobs:
 
   test-workspace:
     name: cargo test --workspace
-    runs-on: ubuntu-latest
+    # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
+    # function discovers any repo whose workflows declare the `keck` label, so no infra change
+    # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
+    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
+    # because every tool it uses arrives through a setup action.
+    runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -87,7 +102,12 @@ jobs:
 
   clippy-workspace:
     name: cargo clippy --workspace
-    runs-on: ubuntu-latest
+    # KECK POOL (KK-AGENTS#237). Self-hosted ephemeral runners in ac-janitor. The queued-jobs
+    # function discovers any repo whose workflows declare the `keck` label, so no infra change
+    # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
+    # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
+    # because every tool it uses arrives through a setup action.
+    runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
