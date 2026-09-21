@@ -1,0 +1,17 @@
+# Pins the whole workspace to one Rust release so CI is reproducible.
+#
+# 1.98.1 is what `dtolnay/rust-toolchain@stable` actually resolved to on
+# 2026-09-21 (run 35558832503), so adopting it introduced no third version.
+#
+# rust-ci.yml asks that action for `stable` and it sets the rustup default.
+# A rust-toolchain.toml in this directory is a directory override, which
+# takes precedence over the default, so every job here gets 1.98.1 and
+# rustup auto-installs it. Both components below are required: the fmt job
+# runs `cargo fmt` and the clippy job runs `cargo clippy`, and each would
+# fail with "not installed for the toolchain" if its component were absent.
+#
+# Bumping: change `channel`, run `cargo fmt --all`, commit both together.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
