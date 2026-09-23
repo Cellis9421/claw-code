@@ -166,7 +166,11 @@ async fn count_tokens_preflight_sends_only_documented_body_fields() {
         .expect("stream should start");
 
     let captured = state.lock().await;
-    assert_eq!(captured.len(), 2, "one count preflight, then one messages call");
+    assert_eq!(
+        captured.len(),
+        2,
+        "one count preflight, then one messages call"
+    );
 
     let count = &captured[0];
     assert_eq!(count.path, "/v1/messages/count_tokens");
@@ -185,7 +189,14 @@ async fn count_tokens_preflight_sends_only_documented_body_fields() {
     count_fields.sort_unstable();
     assert_eq!(
         count_fields,
-        vec!["messages", "model", "system", "thinking", "tool_choice", "tools"]
+        vec![
+            "messages",
+            "model",
+            "system",
+            "thinking",
+            "tool_choice",
+            "tools"
+        ]
     );
     assert_eq!(count_body["model"], json!("claude-sonnet-4-6"));
     assert_eq!(count_body["system"], json!("Use tools when needed"));

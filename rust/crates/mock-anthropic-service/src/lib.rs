@@ -280,8 +280,8 @@ const COUNT_TOKENS_BODY_FIELDS: &[&str] = &[
 /// open unseen.
 fn parse_count_tokens_messages(raw_body: &str) -> io::Result<Vec<InputMessage>> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
-    let mut body: Map<String, Value> = serde_json::from_str(raw_body)
-        .map_err(|error| invalid(error.to_string()))?;
+    let mut body: Map<String, Value> =
+        serde_json::from_str(raw_body).map_err(|error| invalid(error.to_string()))?;
     if let Some(field) = body
         .keys()
         .find(|key| !COUNT_TOKENS_BODY_FIELDS.contains(&key.as_str()))
@@ -291,8 +291,7 @@ fn parse_count_tokens_messages(raw_body: &str) -> io::Result<Vec<InputMessage>> 
     let messages = body
         .remove("messages")
         .ok_or_else(|| invalid("count_tokens body has no messages".to_string()))?;
-    serde_json::from_value(messages)
-        .map_err(|error| invalid(error.to_string()))
+    serde_json::from_value(messages).map_err(|error| invalid(error.to_string()))
 }
 
 fn required_scenario(messages: &[InputMessage]) -> io::Result<Scenario> {
