@@ -118,6 +118,30 @@ jobs:
           $sudo env DEBIAN_FRONTEND=noninteractive \
             apt-get install -y --no-install-recommends build-essential
           cc --version | head -1
+      # KK-AGENTS#323. `tools`' REPL tests run real Python, and the pool image has none, so
+      # `repl_executes_python_code` failed `python runtime not found`. The crate finds it with
+      # `sh -lc 'command -v python3'` (then `python`), a LOGIN shell, so this installs the
+      # distro python3 into /usr/bin rather than using actions/setup-python: setup-python
+      # lands in the tool cache and reaches PATH through GITHUB_PATH, which a login shell's
+      # /etc/profile can reset. The last line re-runs the crate's own probe so a miss fails
+      # here, by name, instead of as a test.
+      - name: Install Python for the REPL tests
+        run: |
+          set -euo pipefail
+          if ! sh -lc 'command -v python3' >/dev/null 2>&1; then
+            if [ "$(id -u)" = "0" ]; then
+              sudo=""
+            elif command -v sudo >/dev/null 2>&1; then
+              sudo="sudo"
+            else
+              echo "no python3, not root, and no sudo available on this runner" >&2
+              exit 1
+            fi
+            $sudo apt-get update -qq
+            $sudo env DEBIAN_FRONTEND=noninteractive \
+              apt-get install -y --no-install-recommends python3
+          fi
+          sh -lc 'command -v python3 && python3 --version'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
