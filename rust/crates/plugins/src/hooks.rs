@@ -337,7 +337,14 @@ impl CommandWithStdin {
         let mut child = self.command.spawn()?;
         if let Some(mut child_stdin) = child.stdin.take() {
             use std::io::Write as _;
-            child_stdin.write_all(stdin)?;
+            // A hook may exit without reading its input, which closes the pipe under us. That
+            // is the hook's choice, not a failure: its exit status and output stay the verdict.
+            // Any other write error is still a real failure.
+            if let Err(error) = child_stdin.write_all(stdin) {
+                if error.kind() != std::io::ErrorKind::BrokenPipe {
+                    return Err(error);
+                }
+            }
         }
         child.wait_with_output()
     }
@@ -451,6 +458,47 @@ mod tests {
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(first_source_root);
         let _ = fs::remove_dir_all(second_source_root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn hook_that_ignores_stdin_is_not_failed_by_a_large_payload() {
+        // given
+        // The hook exits without reading stdin. A payload bigger than the pipe buffer (64 KiB
+        // on Linux) cannot be absorbed by the kernel, so the runner's write always hits EPIPE
+        // instead of racing the hook's exit. The blob also lands in HOOK_TOOL_INPUT, which
+        // Linux caps at 128 KiB per variable, so it stays at 100 KiB; the payload carries it
+        // twice (`tool_input` and `tool_input_json`).
+        let root = temp_dir("ignores-stdin");
+        fs::create_dir_all(&root).expect("hook dir");
+        let script = root.join("ignore-stdin.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' 'ran without reading stdin'\n",
+        )
+        .expect("write hook");
+        let tool_input = format!(r#"{{"blob":"{}"}}"#, "x".repeat(100 * 1024));
+        let event = super::HookEvent::PreToolUse;
+        let payload = super::hook_payload(event, "Write", &tool_input, None, false);
+        let payload_len = payload.to_string().len();
+        assert!(
+            payload_len > 2 * 64 * 1024,
+            "payload must overflow a 64 KiB pipe buffer, got {payload_len} bytes"
+        );
+        let runner = HookRunner::new(crate::PluginHooks {
+            pre_tool_use: vec![script.to_str().expect("utf8 path").to_string()],
+            post_tool_use: Vec::new(),
+            post_tool_use_failure: Vec::new(),
+        });
+
+        // when
+        let result = runner.run_pre_tool_use("Write", &tool_input);
+
+        // then
+        let expected = vec!["ran without reading stdin".to_string()];
+        assert_eq!(result, HookRunResult::allow(expected));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
