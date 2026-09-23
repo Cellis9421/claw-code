@@ -3,8 +3,10 @@ use std::io;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use api::{InputContentBlock, MessageRequest, MessageResponse, OutputContentBlock, Usage};
-use serde_json::{json, Value};
+use api::{
+    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock, Usage,
+};
+use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
@@ -150,19 +152,20 @@ async fn handle_connection(
     requests: Arc<Mutex<Vec<CapturedRequest>>>,
 ) -> io::Result<()> {
     let (method, path, headers, raw_body) = read_http_request(&mut socket).await?;
-    let request: MessageRequest = serde_json::from_str(&raw_body)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let scenario = detect_scenario(&request)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parity scenario"))?;
 
     // KK-AGENTS#318. The client sends a count_tokens preflight before every
-    // messages request (`be561bf`). It carries the same body, `stream` flag
-    // included, so answering it by body alone handed back an SSE stream that
-    // the client could not parse, and its preflight quietly failed open.
-    let response = if path == COUNT_TOKENS_PATH {
-        count_tokens_http_response(scenario)
+    // messages request (`be561bf`). Answering it by body alone handed back an
+    // SSE stream that the client could not parse, and its preflight quietly
+    // failed open, so the count path is answered by path.
+    let (scenario, stream, response) = if path == COUNT_TOKENS_PATH {
+        let scenario = required_scenario(&parse_count_tokens_messages(&raw_body)?)?;
+        (scenario, false, count_tokens_http_response(scenario))
     } else {
-        build_http_response(&request, scenario)
+        let request: MessageRequest = serde_json::from_str(&raw_body)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+        let scenario = required_scenario(&request.messages)?;
+        let response = build_http_response(&request, scenario);
+        (scenario, request.stream, response)
     };
 
     requests.lock().await.push(CapturedRequest {
@@ -170,7 +173,7 @@ async fn handle_connection(
         path,
         headers,
         scenario: scenario.name().to_string(),
-        stream: request.stream,
+        stream,
         raw_body,
     });
 
@@ -256,8 +259,49 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
-fn detect_scenario(request: &MessageRequest) -> Option<Scenario> {
-    request.messages.iter().rev().find_map(|message| {
+/// The body parameters the Count Message Tokens endpoint documents:
+/// <https://platform.claude.com/docs/en/api/messages-count-tokens>.
+/// Kept apart from the client's own list on purpose, so the harness checks
+/// the client against the docs rather than against itself.
+const COUNT_TOKENS_BODY_FIELDS: &[&str] = &[
+    "cache_control",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+    "tool_choice",
+    "tools",
+];
+
+/// KK-AGENTS#324. Refuses a count body carrying any undocumented field, such
+/// as `max_tokens` or `stream`. The refused request is never captured, so the
+/// parity harness's request sequence breaks instead of the preflight failing
+/// open unseen.
+fn parse_count_tokens_messages(raw_body: &str) -> io::Result<Vec<InputMessage>> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
+    let mut body: Map<String, Value> = serde_json::from_str(raw_body)
+        .map_err(|error| invalid(error.to_string()))?;
+    if let Some(field) = body
+        .keys()
+        .find(|key| !COUNT_TOKENS_BODY_FIELDS.contains(&key.as_str()))
+    {
+        return Err(invalid(format!("undocumented count_tokens field: {field}")));
+    }
+    let messages = body
+        .remove("messages")
+        .ok_or_else(|| invalid("count_tokens body has no messages".to_string()))?;
+    serde_json::from_value(messages)
+        .map_err(|error| invalid(error.to_string()))
+}
+
+fn required_scenario(messages: &[InputMessage]) -> io::Result<Scenario> {
+    detect_scenario(messages)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parity scenario"))
+}
+
+fn detect_scenario(messages: &[InputMessage]) -> Option<Scenario> {
+    messages.iter().rev().find_map(|message| {
         message.content.iter().rev().find_map(|block| match block {
             InputContentBlock::Text { text } => text
                 .split_whitespace()
