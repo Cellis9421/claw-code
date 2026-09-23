@@ -138,6 +138,82 @@ async fn send_message_blocks_oversized_requests_before_the_http_call() {
     );
 }
 
+// KK-AGENTS#324. The count preflight must carry only the body parameters the
+// Count Message Tokens endpoint documents, read off the bytes on the wire.
+#[tokio::test]
+async fn count_tokens_preflight_sends_only_documented_body_fields() {
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let server = spawn_server(
+        state.clone(),
+        vec![
+            http_response("200 OK", "application/json", "{\"input_tokens\":42}"),
+            http_response("200 OK", "text/event-stream", ""),
+        ],
+    )
+    .await;
+
+    let client = AnthropicClient::new("test-key")
+        .with_base_url(server.base_url())
+        .with_extra_body_param("metadata", json!({"source": "clawd-code"}))
+        .with_extra_body_param("thinking", json!({"type": "adaptive"}));
+    let request = MessageRequest {
+        model: "claude-sonnet-4-6".to_string(),
+        ..sample_request(true)
+    };
+    let _stream = client
+        .stream_message(&request)
+        .await
+        .expect("stream should start");
+
+    let captured = state.lock().await;
+    assert_eq!(
+        captured.len(),
+        2,
+        "one count preflight, then one messages call"
+    );
+
+    let count = &captured[0];
+    assert_eq!(count.path, "/v1/messages/count_tokens");
+    assert_eq!(
+        count.headers.get("anthropic-beta").map(String::as_str),
+        Some("claude-code-20250219,prompt-caching-scope-2026-01-05")
+    );
+    let count_body: serde_json::Value =
+        serde_json::from_str(&count.body).expect("count body should be json");
+    let mut count_fields = count_body
+        .as_object()
+        .expect("count body should be an object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    count_fields.sort_unstable();
+    assert_eq!(
+        count_fields,
+        vec![
+            "messages",
+            "model",
+            "system",
+            "thinking",
+            "tool_choice",
+            "tools"
+        ]
+    );
+    assert_eq!(count_body["model"], json!("claude-sonnet-4-6"));
+    assert_eq!(count_body["system"], json!("Use tools when needed"));
+    assert_eq!(count_body["tools"][0]["name"], json!("get_weather"));
+    assert_eq!(count_body["tool_choice"]["type"], json!("auto"));
+    assert_eq!(count_body["thinking"]["type"], json!("adaptive"));
+
+    let messages = &captured[1];
+    assert_eq!(messages.path, "/v1/messages");
+    let messages_body: serde_json::Value =
+        serde_json::from_str(&messages.body).expect("messages body should be json");
+    assert_eq!(messages_body["max_tokens"], json!(64));
+    assert_eq!(messages_body["stream"], json!(true));
+    assert_eq!(messages_body["metadata"]["source"], json!("clawd-code"));
+    assert!(messages_body.get("betas").is_some());
+}
+
 #[tokio::test]
 async fn send_message_applies_request_profile_and_records_telemetry() {
     let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));

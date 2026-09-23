@@ -537,7 +537,7 @@ impl AnthropicClient {
             "{}/v1/messages/count_tokens",
             self.base_url.trim_end_matches('/')
         );
-        let request_body = self.request_profile.render_json_body(request)?;
+        let request_body = count_tokens_body(self.request_profile.render_json_body(request)?);
         let response = self
             .build_request(&request_url)
             .json(&request_body)
@@ -585,6 +585,35 @@ impl AnthropicClient {
             .checked_mul(multiplier)
             .map_or(self.max_backoff, |delay| delay.min(self.max_backoff)))
     }
+}
+
+/// The body parameters the Count Message Tokens endpoint documents, and no
+/// others: <https://platform.claude.com/docs/en/api/messages-count-tokens>.
+const COUNT_TOKENS_BODY_FIELDS: &[&str] = &[
+    "cache_control",
+    "messages",
+    "model",
+    "output_config",
+    "system",
+    "thinking",
+    "tool_choice",
+    "tools",
+];
+
+/// Cuts a rendered `/v1/messages` body down to what `count_tokens` accepts.
+///
+/// KK-AGENTS#324. The preflight used to post the messages body as-is, so it
+/// carried `max_tokens`, `stream` on a streamed turn, the `betas` list the
+/// request profile always adds, and any extra body param such as `metadata`.
+/// None of those is a documented count parameter, and the preflight's
+/// fail-open arm would hide a refusal. Everything that changes the count
+/// (messages, system, tools, tool choice, thinking) is on the list and kept,
+/// including when it arrives as an extra body param.
+fn count_tokens_body(mut body: Value) -> Value {
+    if let Some(fields) = body.as_object_mut() {
+        fields.retain(|key, _| COUNT_TOKENS_BODY_FIELDS.contains(&key.as_str()));
+    }
+    body
 }
 
 impl AuthSource {
