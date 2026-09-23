@@ -12,6 +12,12 @@ use tokio::task::JoinHandle;
 
 pub const SCENARIO_PREFIX: &str = "PARITY_SCENARIO:";
 pub const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
+pub const MESSAGES_PATH: &str = "/v1/messages";
+pub const COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
+
+/// What the mock answers every `/v1/messages/count_tokens` preflight with.
+/// Small enough that no scenario's preflight rejects the turn it precedes.
+pub const MOCK_COUNTED_INPUT_TOKENS: u32 = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturedRequest {
@@ -149,6 +155,16 @@ async fn handle_connection(
     let scenario = detect_scenario(&request)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing parity scenario"))?;
 
+    // KK-AGENTS#318. The client sends a count_tokens preflight before every
+    // messages request (`be561bf`). It carries the same body, `stream` flag
+    // included, so answering it by body alone handed back an SSE stream that
+    // the client could not parse, and its preflight quietly failed open.
+    let response = if path == COUNT_TOKENS_PATH {
+        count_tokens_http_response(scenario)
+    } else {
+        build_http_response(&request, scenario)
+    };
+
     requests.lock().await.push(CapturedRequest {
         method,
         path,
@@ -158,7 +174,6 @@ async fn handle_connection(
         raw_body,
     });
 
-    let response = build_http_response(&request, scenario);
     socket.write_all(response.as_bytes()).await?;
     Ok(())
 }
@@ -325,6 +340,15 @@ fn build_http_response(request: &MessageRequest, scenario: Scenario) -> String {
         "200 OK",
         "application/json",
         &serde_json::to_string(&response).expect("message response should serialize"),
+        &[("request-id", request_id_for(scenario))],
+    )
+}
+
+fn count_tokens_http_response(scenario: Scenario) -> String {
+    http_response(
+        "200 OK",
+        "application/json",
+        &json!({ "input_tokens": MOCK_COUNTED_INPUT_TOKENS }).to_string(),
         &[("request-id", request_id_for(scenario))],
     )
 }

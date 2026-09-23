@@ -7,7 +7,9 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mock_anthropic_service::{MockAnthropicService, SCENARIO_PREFIX};
+use mock_anthropic_service::{
+    MockAnthropicService, COUNT_TOKENS_PATH, MESSAGES_PATH, SCENARIO_PREFIX,
+};
 use serde_json::{json, Value};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -182,23 +184,28 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         fs::remove_dir_all(&workspace.root).expect("workspace cleanup should succeed");
     }
 
+    // KK-AGENTS#318. Every model turn is two HTTP requests since `be561bf`: a
+    // `count_tokens` preflight, then the `messages` call it guards. The exact
+    // sequence is asserted rather than a total, so a doubled or missing request
+    // of either kind breaks the pairing, not just the count.
     let captured = runtime.block_on(server.captured_requests());
-    assert_eq!(
-        captured.len(),
-        21,
-        "twelve scenarios should produce twenty-one requests"
-    );
-    assert!(captured
+    let message_requests = captured
         .iter()
-        .all(|request| request.path == "/v1/messages"));
-    assert!(captured.iter().all(|request| request.stream));
+        .filter(|request| request.path == MESSAGES_PATH)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        message_requests.len(),
+        21,
+        "twelve scenarios should produce twenty-one messages requests"
+    );
+    assert!(message_requests.iter().all(|request| request.stream));
 
-    let scenarios = captured
+    let turns = message_requests
         .iter()
         .map(|request| request.scenario.as_str())
         .collect::<Vec<_>>();
     assert_eq!(
-        scenarios,
+        turns,
         vec![
             "streaming_text",
             "read_file_roundtrip",
@@ -224,8 +231,22 @@ fn clean_env_cli_reaches_mock_anthropic_service_across_scripted_parity_scenarios
         ]
     );
 
+    let requests = captured
+        .iter()
+        .map(|request| (request.path.as_str(), request.scenario.as_str()))
+        .collect::<Vec<_>>();
+    let mut expected_requests = Vec::new();
+    for &scenario in &turns {
+        expected_requests.push((COUNT_TOKENS_PATH, scenario));
+        expected_requests.push((MESSAGES_PATH, scenario));
+    }
+    assert_eq!(
+        requests, expected_requests,
+        "each turn should send one count_tokens preflight, then one messages request"
+    );
+
     let mut request_counts = BTreeMap::new();
-    for request in &captured {
+    for request in &message_requests {
         *request_counts
             .entry(request.scenario.as_str())
             .or_insert(0_usize) += 1;
