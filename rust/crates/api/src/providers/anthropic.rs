@@ -14,7 +14,10 @@ use telemetry::{AnalyticsEvent, AnthropicRequestProfile, ClientIdentity, Session
 use crate::error::ApiError;
 use crate::prompt_cache::{PromptCache, PromptCacheRecord, PromptCacheStats};
 
-use super::{model_token_limit, resolve_model_alias, Provider, ProviderFuture};
+use super::{
+    model_token_limit, preflight_message_request as local_context_window_preflight,
+    resolve_model_alias, Provider, ProviderFuture,
+};
 use crate::sse::SseParser;
 use crate::types::{MessageDeltaEvent, MessageRequest, MessageResponse, StreamEvent, Usage};
 
@@ -483,7 +486,25 @@ impl AnthropicClient {
         request_builder
     }
 
+    /// Rejects a request that cannot fit the model's context window, before any
+    /// HTTP call leaves the process, then refines that verdict with the server's
+    /// own token count where one is available.
+    ///
+    /// KK-AGENTS#283. `be561bf` swapped the local estimate out for a
+    /// `/v1/messages/count_tokens` round trip and returned `Ok(())` on every
+    /// error from it. That stopped the guard guarding in two separate ways: it
+    /// could no longer block *before* the HTTP call, which is the property
+    /// `send_message_blocks_oversized_requests_before_the_http_call` asserts,
+    /// and any failed count - a network blip, a 4xx, a body that does not
+    /// deserialize - silently let an oversized request through.
+    ///
+    /// So the local estimate runs first and is authoritative for a rejection.
+    /// It is the only leg that is offline and cannot fail open. The
+    /// `count_tokens` leg is kept for what it was added to do: catch a request
+    /// the byte heuristic under-estimates.
     async fn preflight_message_request(&self, request: &MessageRequest) -> Result<(), ApiError> {
+        local_context_window_preflight(request)?;
+
         let Some(limit) = model_token_limit(&request.model) else {
             return Ok(());
         };
