@@ -1,0 +1,320 @@
+# Posts every pull request in this repo to Keck, so each ticket it names carries a `pr:` tag
+# while it is open, gets `pr-merged:` and a note when it merges, and loses the tag if it closes
+# unmerged. The routes are kk-control's `POST /v1/fleet/pull-requests` and `POST /v1/fleet/merges`;
+# this repo joined them under KK-AGENTS#320.
+#
+# This is a twin of kk-control's `.github/workflows/merge-flag.yml`, which carries the reasoning:
+# the four ways a workflow like this passes while broken, why a 404 is soft on the tag post and
+# hard on the merge post, and why a workflow rather than a poll. The invariant between the copies:
+# strip every comment line and they are byte-identical.
+#
+#   diff <(grep -v -E '^\s*#' <this file>) <(grep -v -E '^\s*#' <kk-control's copy>)
+#
+# So change kk-control's copy first, then every twin, and never adapt the code here alone.
+#
+# Needs two repository secrets, KECK_URL and KECK_TOKEN (a Keck token of role `write`). Without
+# either, the job fails red and names the missing one. That is deliberate: a producer that stops
+# producing in silence is the fault this file exists to remove.
+#
+# Runs on the spot pool (`[self-hosted, linux, keck]`, AC-INFRA#146), never `ubuntu-latest`,
+# which bills minutes on a private repo. No checkout: the input is the event payload on disk and
+# the output is two HTTP requests, so nothing in this repo is built or read.
+name: merge-flag
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Pull request number to post. Any state: its state is read from the pull request, not assumed.'
+        required: true
+        type: string
+
+permissions:
+  pull-requests: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  flag:
+    name: flag the tickets this pull request names
+    runs-on: [self-hosted, linux, keck]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: post this pull request to Keck
+        env:
+          KECK_URL: ${{ secrets.KECK_URL }}
+          KECK_TOKEN: ${{ secrets.KECK_TOKEN }}
+          DISPATCH_PR: ${{ inputs.pr }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          cat > "${RUNNER_TEMP}/merge-flag.js" <<'KECKJS'
+          'use strict';
+          const { readFileSync } = require('node:fs');
+
+          // Fail before the request rather than after it, and name which secret is missing. A
+          // `::warning::` and exit 0 was the other option and is what kk-image's report-image.yml
+          // does; it is wrong here. That job runs on a push to `main`, where a red is a red commit
+          // on the trunk. This runs on a pull request, so its check gates nothing and blocks
+          // nobody -- and a producer that silently stopped producing is the exact failure
+          // KK-META#968 exists to remove, so the only useful severity is the one somebody would
+          // notice. ⚠ This is the fault a 404 is NOT: a missing secret is permanent and invisible,
+          // where a 404 is version skew that the next deploy of the control plane repairs.
+          const missing = ['KECK_URL', 'KECK_TOKEN'].filter((key) => !process.env[key]);
+          if (missing.length > 0) {
+            console.log(`::error::not posting this pull request: repository secret ${missing.join(' and ')} is not set. Set it with: gh secret set <NAME> --repo ${process.env.GITHUB_REPOSITORY} (KECK_TOKEN must be role 'write').`);
+            process.exit(1);
+          }
+
+          const repo = process.env.GITHUB_REPOSITORY;
+          // Trailing slash tolerated, so a secret stored as `https://host/` cannot produce the
+          // double-slashed path some routers 404 on.
+          const base = process.env.KECK_URL.replace(/\/+$/, '');
+          const MERGES_URL = `${base}/v1/fleet/merges`;
+          const PULL_REQUESTS_URL = `${base}/v1/fleet/pull-requests`;
+
+          async function readPullRequest() {
+            const dispatched = (process.env.DISPATCH_PR || '').trim();
+            if (dispatched === '') {
+              // The `pull_request` path. Actions already wrote the event to disk as JSON, so the
+              // title and body arrive as data and nothing had to be quoted (header).
+              return JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).pull_request;
+            }
+            if (!/^[0-9]+$/.test(dispatched)) {
+              throw new Error(`the \`pr\` input must be a pull request number, got ${JSON.stringify(dispatched)}`);
+            }
+            const res = await fetch(`${process.env.GITHUB_API_URL}/repos/${repo}/pulls/${dispatched}`, {
+              headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
+            });
+            if (!res.ok) {
+              // 403 here is the `permissions:` block above, not a bad number; say so, because the
+              // two read identically from a log.
+              throw new Error(`could not read ${repo}#${dispatched} (status ${res.status}); a 403 means this workflow's \`pull-requests: read\` permission was removed`);
+            }
+            return await res.json();
+          }
+
+          // The contract is `src/contract/merge.ts`; these are its field names and its limits, not
+          // invented ones. The caps are defensive -- GitHub's own maxima are inside them -- and a
+          // cap that ever bit would cost at worst one truncated reference, against a 400 that the
+          // route would have been right to send.
+          function requestBody(pr) {
+            const sha = typeof pr.merge_commit_sha === 'string' && /^[0-9a-f]{7,40}$/.test(pr.merge_commit_sha) ? pr.merge_commit_sha : null;
+            return {
+              repo,
+              number: pr.number,
+              // The pull request's real value, never a hardcoded `true` (see the job's `if:`).
+              merged: pr.merged === true,
+              // Null rather than an invented sha. The note then says "an unrecorded commit"
+              // instead of quoting something that is not a commit (`mergeNoteText`).
+              merge_sha: sha,
+              title: String(pr.title ?? '').slice(0, 500),
+              body: String(pr.body ?? '').slice(0, 65536),
+            };
+          }
+
+          // Where the pull request stands, in the CONTRACT's words rather than GitHub's. Derived
+          // from the object, never from the event's action name: the two vocabularies overlap
+          // (`opened`, `reopened`, `closed` against `open`, `merged`, `closed`) and this service
+          // answers 400 to `reopened`, so mapping action names would break on the one trigger that
+          // looks most like it needs no mapping. `merged` is tested FIRST because a merged pull
+          // request also carries `state: 'closed'`, and reading those in the other order would
+          // strip the tag off every ticket whose work had just landed.
+          function pullRequestState(pr) {
+            if (pr.merged === true) return 'merged';
+            return pr.state === 'closed' ? 'closed' : 'open';
+          }
+
+          // The tag route's body (`PullRequestRequest`). It is NOT the merge body with a field
+          // added: there is no `merged` and no `merge_sha` here, because `state` carries both of
+          // those facts, and sending a field the schema does not name is how a producer discovers
+          // zod's stripping the hard way.
+          //
+          // `branch` and `head_sha` (KK-META#1355) are what the pull request row is keyed off: the
+          // branch name is the ONLY thing that says which ticket a pull request delivers. Both are
+          // optional in the contract, so a control plane older than them strips them and answers as
+          // before. Null rather than a guess when the payload lacks one.
+          function tagRequestBody(pr) {
+            const head = pr.head ?? {};
+            return {
+              repo,
+              number: pr.number,
+              state: pullRequestState(pr),
+              title: String(pr.title ?? '').slice(0, 500),
+              body: String(pr.body ?? '').slice(0, 65536),
+              branch: typeof head.ref === 'string' && head.ref.length > 0 && head.ref.length <= 255 ? head.ref : null,
+              head_sha: typeof head.sha === 'string' && /^[0-9a-f]{7,40}$/.test(head.sha) ? head.sha : null,
+            };
+          }
+
+          async function post(url, body) {
+            // Three attempts, because a transport failure here means the flag never lands and
+            // nothing will ever retry it -- there is no queue behind this and no second producer.
+            // Safe to repeat for both routes, and neither keeps a table to make it so: the merge
+            // route is idempotent off the ticket's own event stream, so a retry after a response
+            // we failed to read writes no second note, and the tag route is idempotent off the
+            // ticket's own `tags`, so a repeat that would change nothing writes nothing at all --
+            // no `edit` event and no `updated_at` bump, which matters because `updated_at` is the
+            // board's heartbeat.
+            let last;
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              try {
+                const res = await fetch(url, {
+                  method: 'POST',
+                  headers: { authorization: `Bearer ${process.env.KECK_TOKEN}`, 'content-type': 'application/json' },
+                  body: JSON.stringify(body),
+                  signal: AbortSignal.timeout(30000),
+                });
+                return { status: res.status, text: await res.text() };
+              } catch (error) {
+                last = error;
+                console.log(`attempt ${attempt} of 3 could not reach the control plane: ${error instanceof Error ? error.message : String(error)}`);
+                if (attempt < 3) await new Promise((done) => setTimeout(done, attempt * 2000));
+              }
+            }
+            throw last;
+          }
+
+          // A 200 whose text is not JSON. Shared by both posts, because "the control plane
+          // answered 200 and I cannot say what it did" is the same fault whichever route said it.
+          function parseResult(tag, text) {
+            try {
+              return JSON.parse(text);
+            } catch {
+              console.log(`::error::${tag} the control plane answered 200 with something that is not JSON, so nothing can be said about what it did.`);
+              return null;
+            }
+          }
+
+          // Post the merge, and say what it noted. Returns false on any fault, never exits: the
+          // two posts are independent, and one of them failing must not decide whether the other
+          // one is even attempted. `main` collects the answers and exits once.
+          async function postMerge(pr) {
+            const body = requestBody(pr);
+            // Everything logged here is public metadata. The token is never logged, and Actions
+            // masks the URL because it is a secret.
+            console.log(`[merges] ${repo}#${body.number} merged=${body.merged} sha=${body.merge_sha ?? '(none)'}`);
+            console.log(`[merges] title: ${body.title}`);
+            console.log(`[merges] posting to <KECK_URL>/v1/fleet/merges`);
+
+            const { status, text } = await post(MERGES_URL, body);
+            console.log(`[merges] response status: ${status}`);
+            console.log(`[merges] response body: ${text}`);
+
+            if (status !== 200) {
+              // Trap 2. Every non-200 is a failure, and the two that actually happen are named:
+              // 401/403 is the token, 400 is a body this file built wrongly. ⚠ 404 is HARD here
+              // and soft on the tag post below, which is not an inconsistency: this route has been
+              // live since KK-META#968, so a 404 means a broken deployment or a `KECK_URL` secret
+              // aimed at the wrong host, and this post is what keeps either one visible.
+              console.log(`::error::[merges] flagging ${repo}#${body.number} failed with status ${status} (401 or 403 means KECK_TOKEN is missing, revoked, or not role 'write'; 400 means the request body did not satisfy kk-control's src/contract/merge.ts; 404 means KECK_URL does not point at a control plane serving /v1/fleet/merges).`);
+              return false;
+            }
+
+            // Trap 4: say what happened in words, not just as a JSON blob. `flagged.length +
+            // skipped.length === refs_found` always, so these lines account for every reference.
+            const result = parseResult('[merges]', text);
+            if (result === null) return false;
+            for (const flagged of result.flagged ?? []) console.log(`[merges] flagged ${flagged.ref} (note event ${flagged.event_id})`);
+            for (const skipped of result.skipped ?? []) console.log(`[merges] skipped ${skipped.ref}: ${skipped.reason}`);
+            if ((result.refs_found ?? 0) === 0) {
+              // Not a fault, and worth a line of its own: most pull requests name no ticket, and
+              // "named nothing" must be readable as different from "did not run".
+              console.log(`::notice::[merges] ${repo}#${body.number} names no KEY#n ticket references, so nothing was flagged.`);
+              return true;
+            }
+            console.log(`::notice::[merges] flagged ${(result.flagged ?? []).length} of ${result.refs_found} ticket references named by ${repo}#${body.number}.`);
+            return true;
+          }
+
+          // Post where the pull request stands, and say which tags moved (KK-META#1002). Same
+          // shape as `postMerge` bar the one deliberate difference: a 404 warns and returns TRUE.
+          async function postPullRequest(pr) {
+            const body = tagRequestBody(pr);
+            console.log(`[pull-requests] ${repo}#${body.number} state=${body.state} branch=${body.branch ?? '(none)'} head=${body.head_sha ?? '(none)'}`);
+            console.log(`[pull-requests] title: ${body.title}`);
+            console.log(`[pull-requests] posting to <KECK_URL>/v1/fleet/pull-requests`);
+
+            const { status, text } = await post(PULL_REQUESTS_URL, body);
+            console.log(`[pull-requests] response status: ${status}`);
+            console.log(`[pull-requests] response body: ${text}`);
+
+            if (status === 404) {
+              // The soft skip, and the ONLY one in this file. A control plane older than the route
+              // (`src/fleet/openPr.ts`, KK-META#972) has nothing at this path, and that is version
+              // skew the next deploy repairs by itself. Red on every pull request in this repo for
+              // the duration would be a worse outcome than a missing tag, and it is the failure
+              // mode kk-image has already demonstrated. Loud enough to find in a log, quiet enough
+              // not to gate anything -- and a merge, if this was one, is still posted below and
+              // still goes red on the same 404.
+              console.log(`::warning::[pull-requests] the control plane has no /v1/fleet/pull-requests route (404), so ${repo}#${body.number} was not tagged. This is expected only while the control plane predates kk-control's KK-META#972; if it persists past a deploy, the KECK_URL secret is pointing somewhere unexpected.`);
+              return true;
+            }
+            if (status !== 200) {
+              console.log(`::error::[pull-requests] tagging ${repo}#${body.number} failed with status ${status} (401 or 403 means KECK_TOKEN is missing, revoked, or not role 'write'; 400 means the request body did not satisfy kk-control's src/contract/merge.ts -- most likely \`state\`, whose enum is open/merged/closed and never GitHub's action name).`);
+              return false;
+            }
+
+            const result = parseResult('[pull-requests]', text);
+            if (result === null) return false;
+            // `tagged.length + skipped.length === refs_found` always, the merge response's
+            // invariant restated. `tag` is null when the pull request closed and the tag only came
+            // off, which is a real outcome and not a missing value, so it is printed as `cleared`.
+            for (const tagged of result.tagged ?? []) {
+              const removed = (tagged.removed ?? []).length > 0 ? `, removed ${(tagged.removed ?? []).join(' ')}` : '';
+              console.log(`[pull-requests] ${tagged.ref} (${tagged.signal}) now ${tagged.tag ?? 'cleared'}${removed}`);
+            }
+            for (const skipped of result.skipped ?? []) console.log(`[pull-requests] skipped ${skipped.ref}: ${skipped.reason}`);
+            if ((result.refs_found ?? 0) === 0) {
+              console.log(`::notice::[pull-requests] ${repo}#${body.number} names no KEY#n ticket references, so nothing was tagged.`);
+              return true;
+            }
+            console.log(`::notice::[pull-requests] ${(result.tagged ?? []).length} of ${result.refs_found} ticket references named by ${repo}#${body.number} changed tags (state ${body.state}).`);
+            return true;
+          }
+
+          async function main() {
+            const pr = await readPullRequest();
+            if (pr === undefined || pr === null) {
+              throw new Error('no pull request in the event payload; this workflow only runs on `pull_request` and `workflow_dispatch`');
+            }
+
+            // ⚠ Both posts are attempted, and the exit code is decided once at the end. Returning
+            // early on the first failure would mean a control plane that 500s the tag route also
+            // silently stops recording merges, which is the compound failure this file exists to
+            // make impossible. Each `post*` catches its own transport error for the same reason.
+            const outcomes = [];
+            for (const [name, run] of [['pull-requests', postPullRequest], ['merges', postMerge]]) {
+              if (name === 'merges' && pr.merged !== true) {
+                // The old job-level `if:`, moved here and narrowed to the post it was really about.
+                // `POST /v1/fleet/merges` would accept `merged: false` and correctly write nothing,
+                // so this saves a request rather than changing an answer.
+                console.log(`[merges] ${repo}#${pr.number} did not merge, so there is nothing to note.`);
+                continue;
+              }
+              try {
+                outcomes.push(await run(pr));
+              } catch (error) {
+                console.log(`::error::[${name}] ${error instanceof Error ? error.message : String(error)}`);
+                outcomes.push(false);
+              }
+            }
+            if (outcomes.includes(false)) process.exit(1);
+          }
+
+          main().catch((error) => {
+            console.log(`::error::${error instanceof Error ? error.message : String(error)}`);
+            process.exit(1);
+          });
+          KECKJS
+
+          node "${RUNNER_TEMP}/merge-flag.js"
