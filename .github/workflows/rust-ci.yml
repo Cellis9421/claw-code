@@ -52,6 +52,8 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
     # because every tool it uses arrives through a setup action.
+    # KK-META#3011. This repo is public: never start a fork pull request on the self-hosted pool.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, keck]
     defaults:
       run:
@@ -71,6 +73,8 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
     # because every tool it uses arrives through a setup action.
+    # KK-META#3011. This repo is public: never start a fork pull request on the self-hosted pool.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +95,8 @@ jobs:
     # carries none of `ubuntu-latest`'s preinstalled toolchain. Unlike the two jobs above,
     # this one needs a tool no setup action brings: a C compiler, installed below
     # (KK-AGENTS#275).
+    # KK-META#3011. This repo is public: never start a fork pull request on the self-hosted pool.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
@@ -156,6 +162,8 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain. Like test-workspace, this job
     # needs a C compiler that no setup action brings, installed below (KK-AGENTS#275).
+    # KK-META#3011. This repo is public: never start a fork pull request on the self-hosted pool.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, keck]
     steps:
       - uses: actions/checkout@v4
