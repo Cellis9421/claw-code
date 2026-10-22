@@ -52,7 +52,11 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
     # because every tool it uses arrives through a setup action.
-    runs-on: [self-hosted, linux, keck]
+    # A fork's pull request never runs on the keck pool (KK-META#3011): this repo is public, and a
+    # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
+    # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: .
@@ -71,7 +75,11 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain; this job is safe on it only
     # because every tool it uses arrives through a setup action.
-    runs-on: [self-hosted, linux, keck]
+    # A fork's pull request never runs on the keck pool (KK-META#3011): this repo is public, and a
+    # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
+    # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +99,11 @@ jobs:
     # carries none of `ubuntu-latest`'s preinstalled toolchain. Unlike the two jobs above,
     # this one needs a tool no setup action brings: a C compiler, installed below
     # (KK-AGENTS#275).
-    runs-on: [self-hosted, linux, keck]
+    # A fork's pull request never runs on the keck pool (KK-META#3011): this repo is public, and a
+    # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
+    # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       # KK-AGENTS#275. The pool image ships no C compiler, so the first build script
@@ -156,7 +168,11 @@ jobs:
     # went with this. The image is `ghcr.io/actions/actions-runner:latest`, which is slim and
     # carries none of `ubuntu-latest`'s preinstalled toolchain. Like test-workspace, this job
     # needs a C compiler that no setup action brings, installed below (KK-AGENTS#275).
-    runs-on: [self-hosted, linux, keck]
+    # A fork's pull request never runs on the keck pool (KK-META#3011): this repo is public, and a
+    # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
+    # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       # KK-AGENTS#275. Same gap as test-workspace above: the pool image has no C compiler,
