@@ -56,7 +56,7 @@ jobs:
     # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
     # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
-    timeout-minutes: 15
+    timeout-minutes: 10 # Owner CI budget, KK-AGENTS#450
     defaults:
       run:
         working-directory: .
@@ -79,7 +79,7 @@ jobs:
     # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
     # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
-    timeout-minutes: 15
+    timeout-minutes: 10 # Owner CI budget, KK-AGENTS#450
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -103,7 +103,7 @@ jobs:
     # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
     # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
-    timeout-minutes: 15
+    timeout-minutes: 10 # Owner CI budget, KK-AGENTS#450
     steps:
       - uses: actions/checkout@v4
       # KK-AGENTS#275. The pool image ships no C compiler, so the first build script
@@ -172,7 +172,7 @@ jobs:
     # fork PR is a stranger's code on a machine that also runs our private jobs. It gets GitHub's
     # hosted runner, free on a public repo. Our own branches and pushes keep the pool.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'ubuntu-latest' || fromJSON('["self-hosted", "linux", "keck"]') }} # runner: ubuntu-latest only for a fork's PR, never our own (KK-META#3011)
-    timeout-minutes: 15
+    timeout-minutes: 10 # Owner CI budget, KK-AGENTS#450
     steps:
       - uses: actions/checkout@v4
       # KK-AGENTS#275. Same gap as test-workspace above: the pool image has no C compiler,
